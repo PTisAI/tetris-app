@@ -1,0 +1,277 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f0f23">
+<title>俄罗斯方块</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:#0f0f23; font-family:Consolas,monospace;
+    touch-action:manipulation; user-select:none;
+    -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
+  }
+  #wrap {
+    display:flex; flex-direction:row; justify-content:center; align-items:flex-start;
+    height:100%; padding:10px; gap:12px;
+  }
+  canvas#board { border:1px solid #4a4a6e; border-radius:4px; background:#1a1a2e; }
+  #panel {
+    display:flex; flex-direction:column; align-items:center; color:#fff;
+    min-width:90px; padding-top:4px;
+  }
+  #panel .label { color:#8888cc; font-size:11px; font-weight:bold; margin-top:12px; }
+  #panel .value { font-size:22px; font-weight:bold; margin-bottom:4px; }
+  canvas#preview { background:#1a1a2e; border:1px solid #4a4a6e; border-radius:3px; margin-bottom:8px; }
+  #controls {
+    display:flex; flex-wrap:wrap; justify-content:center; gap:8px;
+    margin-top:8px; max-width:320px;
+  }
+  #controls button {
+    width:56px; height:56px; border-radius:12px; border:2px solid #4a4a6e;
+    background:#1a1a2e; color:#ccc; font-size:22px;
+    cursor:pointer; touch-action:manipulation;
+    display:flex; align-items:center; justify-content:center;
+    transition:background 0.1s;
+  }
+  #controls button:active { background:#3a3a5e; }
+  #controls button.wide { width:80px; font-size:14px; }
+  #bottom-bar {
+    display:flex; flex-direction:column; align-items:center;
+    padding:0 10px 10px;
+  }
+  @media (max-width:500px) {
+    #wrap { flex-direction:column; align-items:center; padding:6px; gap:4px; }
+    #panel { flex-direction:row; flex-wrap:wrap; gap:10px; min-width:unset; }
+    #panel .label { margin-top:0; font-size:10px; }
+    #panel .value { font-size:16px; }
+    canvas#preview { width:70px; height:70px; }
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="board"></canvas>
+  <div id="panel">
+    <div class="label">NEXT</div>
+    <canvas id="preview" width="120" height="120"></canvas>
+    <div class="label">SCORE</div>
+    <div class="value" id="score">0</div>
+    <div class="label">LINES</div>
+    <div class="value" id="lines">0</div>
+    <div class="label">LEVEL</div>
+    <div class="value" id="level">1</div>
+  </div>
+</div>
+<div id="bottom-bar">
+  <div id="controls">
+    <button id="btn-rotate" class="wide">↻</button>
+    <button id="btn-left">◀</button>
+    <button id="btn-down">▼</button>
+    <button id="btn-right">▶</button>
+    <button id="btn-drop" class="wide">⏬</button>
+    <button id="btn-pause" class="wide">⏯</button>
+  </div>
+</div>
+
+<script>
+// ── 常量 ──
+const COLS=10, ROWS=20, CELL=28;
+const COLORS={
+  I:"#00f0f0",O:"#f0f000",T:"#a000f0",S:"#00f000",
+  Z:"#f00000",J:"#0000f0",L:"#f0a000"
+};
+const SHAPES={
+  I:[[[0,0],[1,0],[2,0],[3,0]],[[2,0],[2,1],[2,2],[2,3]],[[0,2],[1,2],[2,2],[3,2]],[[1,0],[1,1],[1,2],[1,3]]],
+  O:[[[0,0],[1,0],[0,1],[1,1]],[[0,0],[1,0],[0,1],[1,1]],[[0,0],[1,0],[0,1],[1,1]],[[0,0],[1,0],[0,1],[1,1]]],
+  T:[[[1,0],[0,1],[1,1],[2,1]],[[1,0],[1,1],[2,1],[1,2]],[[0,1],[1,1],[2,1],[1,2]],[[1,0],[0,1],[1,1],[1,2]]],
+  S:[[[1,0],[2,0],[0,1],[1,1]],[[1,0],[1,1],[2,1],[2,2]],[[1,1],[2,1],[0,2],[1,2]],[[0,0],[0,1],[1,1],[1,2]]],
+  Z:[[[0,0],[1,0],[1,1],[2,1]],[[2,0],[1,1],[2,1],[1,2]],[[0,1],[1,1],[1,2],[2,2]],[[1,0],[0,1],[1,1],[0,2]]],
+  J:[[[0,0],[0,1],[1,1],[2,1]],[[1,0],[2,0],[1,1],[1,2]],[[0,1],[1,1],[2,1],[2,2]],[[1,0],[1,1],[0,2],[1,2]]],
+  L:[[[2,0],[0,1],[1,1],[2,1]],[[1,0],[1,1],[1,2],[2,2]],[[0,1],[1,1],[2,1],[0,2]],[[0,0],[1,0],[1,1],[1,2]]],
+};
+
+// ── 游戏逻辑 ──
+class Tetris {
+  constructor(){
+    this.board=Array.from({length:ROWS},()=>Array(COLS).fill(null));
+    this.score=0; this.lines=0; this.level=1;
+    this.gameOver=false; this.paused=false;
+    this.bag=[]; this.current=null; this.rot=0; this.x=0; this.y=0; this.next=null;
+    this._fillBag(); this.next=this._popBag(); this._spawn();
+  }
+  _fillBag(){ let p=Object.keys(SHAPES); for(let i=p.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[p[i],p[j]]=[p[j],p[i]];} this.bag.push(...p); }
+  _popBag(){ if(this.bag.length<=1) this._fillBag(); return this.bag.pop(); }
+  _spawn(){
+    this.current=this.next; this.rot=0; this.x=COLS/2-2|0; this.y=0; this.next=this._popBag();
+    if(!this._valid(this.current,this.rot,this.x,this.y)) this.gameOver=true;
+  }
+  _cells(p,r,x,y){ return SHAPES[p][r].map(([cx,cy])=>[cx+x,cy+y]); }
+  _valid(p,r,px,py){
+    for(let [x,y] of this._cells(p,r,px,py)){
+      if(x<0||x>=COLS||y>=ROWS) return false;
+      if(y>=0 && this.board[y][x]!==null) return false;
+    }
+    return true;
+  }
+  left(){ if(!this.gameOver&&!this.paused&&this._valid(this.current,this.rot,this.x-1,this.y)) this.x--; }
+  right(){ if(!this.gameOver&&!this.paused&&this._valid(this.current,this.rot,this.x+1,this.y)) this.x++; }
+  down(){
+    if(this.gameOver||this.paused) return false;
+    if(this._valid(this.current,this.rot,this.x,this.y+1)){ this.y++; return true; }
+    else { this._lock(); return false; }
+  }
+  rotate(){
+    if(this.gameOver||this.paused) return;
+    let nr=(this.rot+1)%4;
+    if(this._valid(this.current,nr,this.x,this.y)){ this.rot=nr; return; }
+    for(let dx of [-1,1,-2,2]) if(this._valid(this.current,nr,this.x+dx,this.y)){ this.rot=nr; this.x+=dx; return; }
+  }
+  hardDrop(){
+    if(this.gameOver||this.paused) return;
+    while(this._valid(this.current,this.rot,this.x,this.y+1)) this.y++;
+    this._lock();
+  }
+  _lock(){
+    for(let [x,y] of this._cells(this.current,this.rot,this.x,this.y)){
+      if(y<0){ this.gameOver=true; return; }
+      this.board[y][x]=this.current;
+    }
+    this._clearLines(); this._spawn();
+  }
+  _clearLines(){
+    let cleared=0;
+    for(let y=ROWS-1;y>=0;y--){
+      if(this.board[y].every(c=>c!==null)){
+        this.board.splice(y,1); this.board.unshift(Array(COLS).fill(null));
+        cleared++; y++;
+      }
+    }
+    if(cleared){
+      this.lines+=cleared; this.level=(this.lines/10|0)+1;
+      let pts={1:100,2:300,3:500,4:800};
+      this.score+=(pts[cleared]||cleared*200)*this.level;
+    }
+  }
+  interval(){ return Math.max(50, 800-(this.level-1)*70); }
+  ghostY(){
+    let gy=this.y;
+    while(this._valid(this.current,this.rot,this.x,gy+1)) gy++;
+    return gy;
+  }
+  togglePause(){ if(!this.gameOver){ this.paused=!this.paused; return this.paused; } return false; }
+}
+
+// ── 渲染 ──
+const game=new Tetris();
+const boardEl=document.getElementById("board");
+const ctx=boardEl.getContext("2d");
+const prevEl=document.getElementById("preview");
+const pctx=prevEl.getContext("2d");
+boardEl.width=COLS*CELL; boardEl.height=ROWS*CELL;
+
+function drawCell(c, x, y, color, cs, alpha=true){
+  let px=x*cs, py=y*cs;
+  c.fillStyle=color; c.fillRect(px,py,cs,cs);
+  if(alpha){
+    c.fillStyle="rgba(255,255,255,0.25)";
+    c.fillRect(px+2,py+2,cs*0.25,cs*0.25);
+    c.fillStyle="rgba(0,0,0,0.3)";
+    c.fillRect(px+cs-4,py+2,3,cs-4);
+    c.fillRect(px+2,py+cs-4,cs-4,3);
+  }
+}
+
+function draw(){
+  // board
+  ctx.fillStyle="#1a1a2e"; ctx.fillRect(0,0,boardEl.width,boardEl.height);
+  ctx.strokeStyle="#2a2a4e"; ctx.lineWidth=0.5;
+  for(let r=0;r<=ROWS;r++){ ctx.beginPath(); ctx.moveTo(0,r*CELL); ctx.lineTo(COLS*CELL,r*CELL); ctx.stroke(); }
+  for(let c=0;c<=COLS;c++){ ctx.beginPath(); ctx.moveTo(c*CELL,0); ctx.lineTo(c*CELL,ROWS*CELL); ctx.stroke(); }
+
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(game.board[r][c]) drawCell(ctx,c,r,COLORS[game.board[r][c]],CELL);
+
+  if(!game.gameOver && !game.paused){
+    let gy=game.ghostY();
+    if(gy!==game.y){
+      for(let [x,y] of game._cells(game.current,game.rot,game.x,gy)){
+        if(y>=0){ ctx.strokeStyle=COLORS[game.current]; ctx.lineWidth=2;
+          ctx.strokeRect(x*CELL+2,y*CELL+2,CELL-4,CELL-4); }
+      }
+    }
+    for(let [x,y] of game._cells(game.current,game.rot,game.x,game.y)){
+      if(y>=0) drawCell(ctx,x,y,COLORS[game.current],CELL);
+    }
+  }
+
+  // preview
+  pctx.fillStyle="#1a1a2e"; pctx.fillRect(0,0,120,120);
+  if(game.next){
+    let cells=SHAPES[game.next][0];
+    let mx=Math.min(...cells.map(([x])=>x)), Mx=Math.max(...cells.map(([x])=>x));
+    let my=Math.min(...cells.map(([,y])=>y)), My=Math.max(...cells.map(([,y])=>y));
+    let pw=Mx-mx+1, ph=My-my+1, ox=(4-pw)/2-mx, oy=(4-ph)/2-my, pc=28;
+    for(let [x,y] of cells) drawCell(pctx,x+ox,y+oy,COLORS[game.next],pc,false);
+  }
+
+  // text
+  document.getElementById("score").textContent=game.score;
+  document.getElementById("lines").textContent=game.lines;
+  document.getElementById("level").textContent=game.level;
+
+  // overlay
+  if(game.gameOver || game.paused){
+    ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(0,0,boardEl.width,boardEl.height);
+    ctx.fillStyle=game.gameOver?"#ff4444":"#ffcc00"; ctx.font="bold 26px Consolas,monospace";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(game.gameOver?"GAME OVER":"PAUSED",boardEl.width/2,boardEl.height/2);
+    ctx.textAlign="start";
+  }
+}
+
+// ── 循环 ──
+let dropTimer=null;
+function scheduleDrop(){
+  clearTimeout(dropTimer);
+  if(!game.gameOver && !game.paused) dropTimer=setTimeout(tick, game.interval());
+}
+function tick(){ game.down(); draw(); scheduleDrop(); }
+
+// ── 输入 ──
+function act(fn){ fn(); draw(); }
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft") act(()=>game.left());
+  else if(e.key==="ArrowRight") act(()=>game.right());
+  else if(e.key==="ArrowDown") act(()=>game.down());
+  else if(e.key==="ArrowUp") act(()=>game.rotate());
+  else if(e.key===" "){ e.preventDefault(); act(()=>game.hardDrop()); }
+  else if(e.key==="p"||e.key==="P") act(()=>{ game.togglePause(); scheduleDrop(); });
+});
+
+document.getElementById("btn-left").addEventListener("pointerdown",()=>act(()=>game.left()));
+document.getElementById("btn-right").addEventListener("pointerdown",()=>act(()=>game.right()));
+document.getElementById("btn-down").addEventListener("pointerdown",()=>act(()=>game.down()));
+document.getElementById("btn-rotate").addEventListener("pointerdown",()=>act(()=>game.rotate()));
+document.getElementById("btn-drop").addEventListener("pointerdown",()=>act(()=>game.hardDrop()));
+document.getElementById("btn-pause").addEventListener("pointerdown",()=>act(()=>{ game.togglePause(); scheduleDrop(); }));
+
+draw(); scheduleDrop();
+
+// ── 自适应 canvas 大小 ──
+function resize(){
+  let maxH=window.innerHeight-180, maxW=window.innerWidth-120;
+  if(window.innerWidth<=500){ maxH=window.innerHeight-240; maxW=window.innerWidth-20; }
+  let sz=Math.min((maxW-100)/COLS, maxH/ROWS, 36)|0;
+  if(sz<16) sz=16;
+  // resize main board only, keeping internal CELL constant
+}
+window.addEventListener("resize", resize);
+resize();
+</script>
+</body>
+</html>
